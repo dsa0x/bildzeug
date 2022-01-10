@@ -5,9 +5,12 @@ import (
 	"image"
 	"image/color"
 	"image/jpeg"
+	"image/png"
 	"io"
 	"log"
 	"math"
+	"os"
+	"strings"
 )
 
 type FilterType string
@@ -28,7 +31,38 @@ type BlurOptions struct {
 }
 
 func Blur(r io.Reader, w io.Writer, opts BlurOptions) error {
-	img, err := jpeg.Decode(r)
+
+	imgFile := r.(*os.File)
+	imgStats, err := imgFile.Stat()
+	if err != nil {
+		return fmt.Errorf("unable to get file stats: %v", err)
+	}
+
+	nameSplit := strings.Split(imgStats.Name(), ".")
+	if len(nameSplit) < 2 {
+		return fmt.Errorf("unable to get file name")
+	}
+
+	ext := nameSplit[len(nameSplit)-1]
+
+	var img image.Image
+	switch ext {
+	case "jpg", "jpeg":
+		img, err = jpeg.Decode(imgFile)
+		if err != nil {
+			return fmt.Errorf("unable to decode jpeg: %v", err)
+		}
+	case "png":
+		img, err = png.Decode(imgFile)
+		if err != nil {
+			return fmt.Errorf("unable to decode png: %v", err)
+		}
+
+	default:
+		return fmt.Errorf("unsupported file type: %v", ext)
+	}
+
+	// img, _, err := image.Decode(imgFile)
 	if opts.KernelSize == 0 {
 		opts.KernelSize = 3
 	}
@@ -48,7 +82,7 @@ func Blur(r io.Reader, w io.Writer, opts BlurOptions) error {
 	padding := opts.KernelSize / 2
 	rect := image.Rect(bounds.Min.X, bounds.Min.Y, bounds.Dx()+padding, bounds.Dy()+padding)
 	newImg := image.NewRGBA(rect)
-	finalImg := image.NewRGBA(bounds)
+	finalImg := image.NewNRGBA(bounds)
 
 	// pad the matrix
 	for i := 0; i < bounds.Max.X; i++ {
@@ -83,7 +117,7 @@ func Blur(r io.Reader, w io.Writer, opts BlurOptions) error {
 	return err
 }
 
-func convolve(pixel [][]color.Color, size int, filtertype FilterType) color.RGBA64 {
+func convolve(pixel [][]color.Color, size int, filtertype FilterType) color.Color {
 	//
 	var filter [][]float64
 	var divisor int
@@ -109,12 +143,19 @@ func convolve(pixel [][]color.Color, size int, filtertype FilterType) color.RGBA
 		}
 	}
 
-	r := uint16(sumR / uint32(divisor))
-	g := uint16(sumG / uint32(divisor))
-	b := uint16(sumB / uint32(divisor))
+	r := uint8(min(sumR/uint32(divisor), 0xffff) >> 8)
+	g := uint8(min(sumG/uint32(divisor), 0xffff) >> 8)
+	b := uint8(min(sumB/uint32(divisor), 0xffff) >> 8)
 
-	return color.RGBA64{r, g, b, uint16(math.MaxUint16)}
+	return color.NRGBA{r, g, b, uint8(math.MaxUint8)}
 
+}
+
+func min(a, b uint32) uint32 {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // filterMAKernel uses the moving average as the kernel filter
